@@ -10,8 +10,8 @@ def main():
     """
 
     # Define input and output directories
-    input_dir = r"C:\KRAKEN"
-    output_dir = r"C:\KRAKEN\batch_processed"
+    input_dir = r"XX:\KRAKEN"
+    output_dir = r"XX:\KRAKEN\batch_processed"
 
     print("SAS Mosaic Builder - Batch Processing Example")
     print("=" * 50)

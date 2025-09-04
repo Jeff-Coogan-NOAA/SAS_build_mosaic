@@ -13,9 +13,11 @@ import queue
 import sys
 
 # Import the required modules
+
 from .geotiff_downscale import resample_geotiff
 from . import confidence_mapper as dpc
 from . import sas_masker as csm
+from .crop_edges import crop_geotiff_left_right
 
 
 class SASProcessorGUI:
@@ -24,6 +26,15 @@ class SASProcessorGUI:
         self.root.title("Batch SAS Processor")
         self.root.geometry("800x600")
         
+        self.workflow = tk.StringVar(self.root, value="Crop Edges")
+        self.nadir_crop_m = tk.DoubleVar(self.root, value=45)
+        self.outer_edge_crop_m = tk.DoubleVar(self.root, value=3)
+        self.resolution = tk.DoubleVar(self.root, value=0.10)
+        self.goal_resolution = tk.DoubleVar(self.root, value=1.0)
+        self.threshold = tk.DoubleVar(self.root, value=0.65)
+        self.input_dir = tk.StringVar(self.root)
+        self.output_dir = tk.StringVar(self.root)
+
         # Set custom window icon (.ico file)
         icon_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'NOAA_Emblem.ico')
         if os.path.exists(icon_path):
@@ -34,13 +45,6 @@ class SASProcessorGUI:
 
         # Queue for thread communication
         self.queue = queue.Queue()
-        
-        # Variables
-        self.input_dir = tk.StringVar()
-        self.output_dir = tk.StringVar()
-        self.resolution = tk.DoubleVar(value=0.10)  # 10cm default
-        self.goal_resolution = tk.DoubleVar(value=1.0)  # 1m default for motion
-        self.threshold = tk.DoubleVar(value=0.65)  # Confidence threshold
         
         self.setup_ui()
         
@@ -92,43 +96,68 @@ class SASProcessorGUI:
         ttk.Entry(params_frame, textvariable=self.resolution, width=10).grid(
             row=0, column=1, sticky=tk.W, padx=(5, 0), pady=2)
         
-        # Motion file goal resolution
-        ttk.Label(params_frame, text="Motion Goal Resolution (m):").grid(
-            row=1, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(params_frame, textvariable=self.goal_resolution, width=10).grid(
-            row=1, column=1, sticky=tk.W, padx=(5, 0), pady=2)
-        
-        # Confidence threshold
-        ttk.Label(params_frame, text="Confidence Threshold:").grid(
-            row=2, column=0, sticky=tk.W, pady=2)
-        ttk.Entry(params_frame, textvariable=self.threshold, width=10).grid(
-            row=2, column=1, sticky=tk.W, padx=(5, 0), pady=2)
-        
+
+        # Workflow selection
+        workflow_frame = ttk.LabelFrame(main_frame, text="Workflow", padding="10")
+        workflow_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
+        workflow_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(workflow_frame, text="Select Workflow:").grid(row=0, column=0, sticky=tk.W)
+        workflow_options = ["Mask", "Crop Edges"]
+        workflow_menu = ttk.OptionMenu(workflow_frame, self.workflow, self.workflow.get(), *workflow_options)
+        workflow_menu.grid(row=0, column=1, sticky=tk.W)
+
+        # Crop parameters (shown only for Crop Edges)
+        self.crop_params_frame = ttk.Frame(workflow_frame)
+        self.crop_params_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(self.crop_params_frame, text="Nadir Crop (m):").grid(row=0, column=0, sticky=tk.W)
+        ttk.Entry(self.crop_params_frame, textvariable=self.nadir_crop_m, width=10).grid(row=0, column=1, sticky=tk.W)
+        ttk.Label(self.crop_params_frame, text="Outer Edge Crop (m):").grid(row=1, column=0, sticky=tk.W)
+        ttk.Entry(self.crop_params_frame, textvariable=self.outer_edge_crop_m, width=10).grid(row=1, column=1, sticky=tk.W)
+
+        # Mask parameters (shown only for Mask)
+        self.mask_params_frame = ttk.Frame(workflow_frame)
+        self.mask_params_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(self.mask_params_frame, text="Motion Goal Resolution (m):").grid(row=0, column=0, sticky=tk.W)
+        ttk.Entry(self.mask_params_frame, textvariable=self.goal_resolution, width=10).grid(row=0, column=1, sticky=tk.W)
+        ttk.Label(self.mask_params_frame, text="Confidence Threshold:").grid(row=1, column=0, sticky=tk.W)
+        ttk.Entry(self.mask_params_frame, textvariable=self.threshold, width=10).grid(row=1, column=1, sticky=tk.W)
+
+        def update_crop_params_visibility(*args):
+            if self.workflow.get() == "Crop Edges":
+                self.crop_params_frame.grid()
+                self.mask_params_frame.grid_remove()
+            else:
+                self.crop_params_frame.grid_remove()
+                self.mask_params_frame.grid()
+        self.workflow.trace_add("write", update_crop_params_visibility)
+        update_crop_params_visibility()
+
         # Control buttons
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=5, column=0, columnspan=2, pady=10)
-        
+        button_frame.grid(row=6, column=0, columnspan=2, pady=10)
+
         self.process_button = ttk.Button(button_frame, text="Process Files", 
                                        command=self.start_processing)
         self.process_button.pack(side=tk.LEFT, padx=(0, 5))
-        
+
         self.preview_button = ttk.Button(button_frame, text="Preview Files", 
                                        command=self.preview_files)
         self.preview_button.pack(side=tk.LEFT)
         
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, mode='determinate')
-        self.progress.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.progress.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # Log output
         ttk.Label(main_frame, text="Processing Log:").grid(
-            row=7, column=0, sticky=tk.W, pady=(10, 5))
+            row=8, column=0, sticky=tk.W, pady=(10, 5))
         
         self.log_text = scrolledtext.ScrolledText(main_frame, height=15, width=70)
-        self.log_text.grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        self.log_text.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         
         # Configure grid weights for log area
-        main_frame.rowconfigure(8, weight=1)
+        main_frame.rowconfigure(9, weight=1)
         
     def browse_input_dir(self):
         """Browse for input directory"""
@@ -282,41 +311,47 @@ class SASProcessorGUI:
             for i, (tif_file, motion_file) in enumerate(valid_files):
                 try:
                     self.queue.put(("log", f"\n--- Processing {i+1}/{len(valid_files)}: {os.path.basename(tif_file)} ---"))
-                    
                     # Update progress
                     progress = (i / len(valid_files)) * 100
                     self.queue.put(("progress", progress))
-                    
-                    # Use main output directory directly (no subfolders)
                     file_output_dir = self.output_dir.get()
                     os.makedirs(file_output_dir, exist_ok=True)
-                    
+
                     # Step 1: Downsample the SAS file
                     self.queue.put(("log", f"Downsampling to {self.resolution.get()}m resolution..."))
                     downsample_filepath = resample_geotiff(tif_file, file_output_dir, self.resolution.get())
                     self.queue.put(("log", f"Downsampled file: {os.path.basename(downsample_filepath)}"))
-                    
-                    # Step 2: Build motion data geotiff
-                    self.queue.put(("log", "Building confidence coverage map..."))
-                    tif_output_filename = dpc.main_confidence_to_coverage(
-                        motion_file, downsample_filepath, goal_resolution_m=self.goal_resolution.get())
-                    self.queue.put(("log", f"Confidence map: {os.path.basename(tif_output_filename)}"))
-                    
-                    # Step 3: Mask the SAS tif using confidence values
-                    self.queue.put(("log", "Creating masked SAS file..."))
-                    masked_sas_filename = csm.mask_sas_with_confidence(
-                        sas_file_path=downsample_filepath,
-                        confidence_file_path=tif_output_filename,
-                        threshold=self.threshold.get()
-                    )
-                    self.queue.put(("log", f"Masked SAS: {os.path.basename(masked_sas_filename)}"))
-                    
+
+                    if self.workflow.get() == "Crop Edges":
+                        # Crop the downsampled file
+                        self.queue.put(("log", f"Cropping edges: nadir={self.nadir_crop_m.get()}m, outer={self.outer_edge_crop_m.get()}m"))
+                        cropped_filepath = crop_geotiff_left_right(
+                            downsample_filepath,
+                            nadir_crop_m=self.nadir_crop_m.get(),
+                            outer_edge_crop_m=self.outer_edge_crop_m.get()
+                        )
+                        self.queue.put(("log", f"Cropped SAS: {os.path.basename(cropped_filepath)}"))
+                    else:
+                        # Mask workflow
+                        self.queue.put(("log", "Building confidence coverage map..."))
+                        tif_output_filename = dpc.main_confidence_to_coverage(
+                            motion_file, downsample_filepath, goal_resolution_m=self.goal_resolution.get())
+                        self.queue.put(("log", f"Confidence map: {os.path.basename(tif_output_filename)}"))
+
+                        self.queue.put(("log", "Creating masked SAS file..."))
+                        masked_sas_filename = csm.mask_sas_with_confidence(
+                            sas_file_path=downsample_filepath,
+                            confidence_file_path=tif_output_filename,
+                            threshold=self.threshold.get()
+                        )
+                        self.queue.put(("log", f"Masked SAS: {os.path.basename(masked_sas_filename)}"))
+
                     self.queue.put(("log", f"Completed processing {os.path.basename(tif_file)}"))
-                    
+
                 except Exception as e:
                     self.queue.put(("log", f"Error processing {os.path.basename(tif_file)}: {str(e)}"))
                     continue
-            
+
             # Final progress update
             self.queue.put(("progress", 100))
             self.queue.put(("log", f"\n=== Processing Complete ==="))

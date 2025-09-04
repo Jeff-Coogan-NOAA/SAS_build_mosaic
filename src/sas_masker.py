@@ -26,6 +26,7 @@ def mask_sas_with_confidence(sas_file_path, confidence_file_path, threshold=0.65
             sas_data = sas_src.read(1)  # Read first band
             sas_profile = sas_src.profile.copy()
             sas_transform = sas_src.transform
+            print(f"SAS CRS: {sas_src.crs}, Width: {sas_src.width}, Height: {sas_src.height}")
             
         # Read the confidence GeoTIFF
         with rasterio.open(confidence_file_path) as conf_src:
@@ -71,8 +72,6 @@ def mask_sas_with_confidence(sas_file_path, confidence_file_path, threshold=0.65
             nodata=np.nan
         )
         
-                
-    
         mask_dir = os.path.join(os.path.dirname(sas_file_path), "mask")
         os.makedirs(mask_dir, exist_ok=True)
         output_path = os.path.join(mask_dir, os.path.basename(sas_file_path).replace('.tif', '_masked.tif'))
@@ -91,61 +90,4 @@ def mask_sas_with_confidence(sas_file_path, confidence_file_path, threshold=0.65
         print(f"Error masking SAS file: {e}")
         import traceback
         traceback.print_exc()
-        return None
-
-def mask_sas_with_confidence_simple(sas_file_path, confidence_file_path, threshold=0.65, output_path=None):
-    """
-    Simple version using tifffile if rasterio is not available.
-    
-    Args:
-        sas_file_path (str): Path to the original SAS GeoTIFF file
-        confidence_file_path (str): Path to the confidence GeoTIFF file  
-        threshold (float): Confidence threshold value (default: 0.65)
-        output_path (str): Output path for masked GeoTIFF (optional)
-    
-    Returns:
-        str: Path to the output masked GeoTIFF file
-    """
-    try:
-        import tifffile
-        import numpy as np
-        
-        # Generate output filename if not provided
-        if output_path is None:
-            output_path = sas_file_path.replace('.tif', '_masked.tif')
-        
-        # Read the SAS GeoTIFF
-        sas_data = tifffile.imread(sas_file_path)
-        
-        # Read the confidence GeoTIFF
-        conf_data = tifffile.imread(confidence_file_path)
-        
-        print(f"SAS data shape: {sas_data.shape}")
-        print(f"Confidence data shape: {conf_data.shape}")
-        
-        # Resize if needed
-        if sas_data.shape != conf_data.shape:
-            print("Warning: Different shapes. Consider using the rasterio version for proper resampling.")
-            # Simple resize using numpy (not recommended for geospatial data)
-            from scipy.ndimage import zoom
-            zoom_y = sas_data.shape[0] / conf_data.shape[0]
-            zoom_x = sas_data.shape[1] / conf_data.shape[1]
-            conf_data = zoom(conf_data, (zoom_y, zoom_x), order=1)
-        
-        # Create mask and apply
-        mask = conf_data >= threshold
-        masked_sas = sas_data.copy().astype(np.float32)
-        masked_sas[~mask] = np.nan
-        
-        print(f"Applied mask with threshold {threshold}")
-        print(f"Pixels above threshold: {np.sum(mask)} / {mask.size} ({100*np.sum(mask)/mask.size:.1f}%)")
-        
-        # Save using tifffile
-        tifffile.imwrite(output_path, masked_sas, compress='lzw')
-        
-        print(f"Masked SAS GeoTIFF saved to: {output_path}")
-        return output_path
-        
-    except Exception as e:
-        print(f"Error masking SAS file: {e}")
         return None
