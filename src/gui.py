@@ -26,7 +26,9 @@ class SASProcessorGUI:
         self.root.title("Batch SAS Processor")
         self.root.geometry("800x600")
         
-        self.workflow = tk.StringVar(self.root, value="Crop Edges")
+        # Workflow checkboxes instead of dropdown
+        self.use_crop_edges = tk.BooleanVar(self.root, value=True)
+        self.use_mask = tk.BooleanVar(self.root, value=True)
         self.nadir_crop_m = tk.DoubleVar(self.root, value=45)
         self.outer_edge_crop_m = tk.DoubleVar(self.root, value=3)
         self.resolution = tk.DoubleVar(self.root, value=0.10)
@@ -98,40 +100,46 @@ class SASProcessorGUI:
         
 
         # Workflow selection
-        workflow_frame = ttk.LabelFrame(main_frame, text="Workflow", padding="10")
+        workflow_frame = ttk.LabelFrame(main_frame, text="Workflows", padding="10")
         workflow_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
         workflow_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(workflow_frame, text="Select Workflow:").grid(row=0, column=0, sticky=tk.W)
-        workflow_options = ["Mask", "Crop Edges"]
-        workflow_menu = ttk.OptionMenu(workflow_frame, self.workflow, self.workflow.get(), *workflow_options)
-        workflow_menu.grid(row=0, column=1, sticky=tk.W)
-
-        # Crop parameters (shown only for Crop Edges)
+        # Crop Edges checkbox and parameters
+        crop_checkbox = ttk.Checkbutton(workflow_frame, text="Crop Edges", variable=self.use_crop_edges)
+        crop_checkbox.grid(row=0, column=0, sticky=tk.W, pady=5)
+        
         self.crop_params_frame = ttk.Frame(workflow_frame)
         self.crop_params_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        ttk.Label(self.crop_params_frame, text="Nadir Crop (m):").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(self.crop_params_frame, text="    Nadir Crop (m):").grid(row=0, column=0, sticky=tk.W)
         ttk.Entry(self.crop_params_frame, textvariable=self.nadir_crop_m, width=10).grid(row=0, column=1, sticky=tk.W)
-        ttk.Label(self.crop_params_frame, text="Outer Edge Crop (m):").grid(row=1, column=0, sticky=tk.W)
+        ttk.Label(self.crop_params_frame, text="    Outer Edge Crop (m):").grid(row=1, column=0, sticky=tk.W)
         ttk.Entry(self.crop_params_frame, textvariable=self.outer_edge_crop_m, width=10).grid(row=1, column=1, sticky=tk.W)
 
-        # Mask parameters (shown only for Mask)
+        # Mask checkbox and parameters
+        mask_checkbox = ttk.Checkbutton(workflow_frame, text="Mask with Confidence", variable=self.use_mask)
+        mask_checkbox.grid(row=2, column=0, sticky=tk.W, pady=5)
+        
         self.mask_params_frame = ttk.Frame(workflow_frame)
-        self.mask_params_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        ttk.Label(self.mask_params_frame, text="Motion Goal Resolution (m):").grid(row=0, column=0, sticky=tk.W)
+        self.mask_params_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Label(self.mask_params_frame, text="    Motion Goal Resolution (m):").grid(row=0, column=0, sticky=tk.W)
         ttk.Entry(self.mask_params_frame, textvariable=self.goal_resolution, width=10).grid(row=0, column=1, sticky=tk.W)
-        ttk.Label(self.mask_params_frame, text="Confidence Threshold:").grid(row=1, column=0, sticky=tk.W)
+        ttk.Label(self.mask_params_frame, text="    Confidence Threshold:").grid(row=1, column=0, sticky=tk.W)
         ttk.Entry(self.mask_params_frame, textvariable=self.threshold, width=10).grid(row=1, column=1, sticky=tk.W)
 
-        def update_crop_params_visibility(*args):
-            if self.workflow.get() == "Crop Edges":
+        def update_params_visibility(*args):
+            if self.use_crop_edges.get():
                 self.crop_params_frame.grid()
-                self.mask_params_frame.grid_remove()
             else:
                 self.crop_params_frame.grid_remove()
+                
+            if self.use_mask.get():
                 self.mask_params_frame.grid()
-        self.workflow.trace_add("write", update_crop_params_visibility)
-        update_crop_params_visibility()
+            else:
+                self.mask_params_frame.grid_remove()
+                
+        self.use_crop_edges.trace_add("write", update_params_visibility)
+        self.use_mask.trace_add("write", update_params_visibility)
+        update_params_visibility()
 
         # Control buttons
         button_frame = ttk.Frame(main_frame)
@@ -244,6 +252,11 @@ class SASProcessorGUI:
             messagebox.showerror("Error", "Please select both input and output directories")
             return
             
+        # Check if at least one workflow is selected
+        if not self.use_crop_edges.get() and not self.use_mask.get():
+            messagebox.showerror("Error", "Please select at least one workflow (Crop Edges or Mask)")
+            return
+            
         # Disable the process button
         self.process_button.config(state='disabled')
         
@@ -322,7 +335,8 @@ class SASProcessorGUI:
                     downsample_filepath = resample_geotiff(tif_file, file_output_dir, self.resolution.get())
                     self.queue.put(("log", f"Downsampled file: {os.path.basename(downsample_filepath)}"))
 
-                    if self.workflow.get() == "Crop Edges":
+                    # Step 2: Run selected workflows
+                    if self.use_crop_edges.get():
                         # Crop the downsampled file
                         self.queue.put(("log", f"Cropping edges: nadir={self.nadir_crop_m.get()}m, outer={self.outer_edge_crop_m.get()}m"))
                         cropped_filepath = crop_geotiff_left_right(
@@ -331,7 +345,8 @@ class SASProcessorGUI:
                             outer_edge_crop_m=self.outer_edge_crop_m.get()
                         )
                         self.queue.put(("log", f"Cropped SAS: {os.path.basename(cropped_filepath)}"))
-                    else:
+                        
+                    if self.use_mask.get():
                         # Mask workflow
                         self.queue.put(("log", "Building confidence coverage map..."))
                         tif_output_filename = dpc.main_confidence_to_coverage(
