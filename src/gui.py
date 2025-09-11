@@ -252,11 +252,6 @@ class SASProcessorGUI:
             messagebox.showerror("Error", "Please select both input and output directories")
             return
             
-        # Check if at least one workflow is selected
-        if not self.use_crop_edges.get() and not self.use_mask.get():
-            messagebox.showerror("Error", "Please select at least one workflow (Crop Edges or Mask)")
-            return
-            
         # Disable the process button
         self.process_button.config(state='disabled')
         
@@ -301,21 +296,29 @@ class SASProcessorGUI:
                 self.queue.put(("done", None))
                 return
             
-            # Filter files that have corresponding motion files
-            valid_files = []
-            for tif_file in tif_files:
-                motion_file = self.find_motion_file(tif_file)
-                if motion_file:
-                    valid_files.append((tif_file, motion_file))
-                else:
-                    self.queue.put(("log", f"Skipping {os.path.basename(tif_file)} - no motion file found"))
+            # Check if motion files are needed (only for mask workflow)
+            need_motion_files = self.use_mask.get()
             
-            if not valid_files:
-                self.queue.put(("log", "No valid file pairs found"))
-                self.queue.put(("done", None))
-                return
-            
-            self.queue.put(("log", f"Processing {len(valid_files)} file pairs..."))
+            if need_motion_files:
+                # Filter files that have corresponding motion files
+                valid_files = []
+                for tif_file in tif_files:
+                    motion_file = self.find_motion_file(tif_file)
+                    if motion_file:
+                        valid_files.append((tif_file, motion_file))
+                    else:
+                        self.queue.put(("log", f"Skipping {os.path.basename(tif_file)} - no motion file found"))
+                
+                if not valid_files:
+                    self.queue.put(("log", "No valid file pairs found"))
+                    self.queue.put(("done", None))
+                    return
+                
+                self.queue.put(("log", f"Processing {len(valid_files)} file pairs..."))
+            else:
+                # No motion files needed - process all .tif files
+                valid_files = [(tif_file, None) for tif_file in tif_files]
+                self.queue.put(("log", f"Processing {len(valid_files)} .tif files (no motion files needed)..."))
             
             # Create output directory if it doesn't exist
             os.makedirs(self.output_dir.get(), exist_ok=True)
@@ -336,6 +339,8 @@ class SASProcessorGUI:
                     self.queue.put(("log", f"Downsampled file: {os.path.basename(downsample_filepath)}"))
 
                     # Step 2: Run selected workflows
+                    workflows_run = 0
+                    
                     if self.use_crop_edges.get():
                         # Crop the downsampled file
                         self.queue.put(("log", f"Cropping edges: nadir={self.nadir_crop_m.get()}m, outer={self.outer_edge_crop_m.get()}m"))
@@ -345,21 +350,29 @@ class SASProcessorGUI:
                             outer_edge_crop_m=self.outer_edge_crop_m.get()
                         )
                         self.queue.put(("log", f"Cropped SAS: {os.path.basename(cropped_filepath)}"))
+                        workflows_run += 1
                         
                     if self.use_mask.get():
-                        # Mask workflow
-                        self.queue.put(("log", "Building confidence coverage map..."))
-                        tif_output_filename = dpc.main_confidence_to_coverage(
-                            motion_file, downsample_filepath, goal_resolution_m=self.goal_resolution.get())
-                        self.queue.put(("log", f"Confidence map: {os.path.basename(tif_output_filename)}"))
+                        if motion_file:
+                            # Mask workflow
+                            self.queue.put(("log", "Building confidence coverage map..."))
+                            tif_output_filename = dpc.main_confidence_to_coverage(
+                                motion_file, downsample_filepath, goal_resolution_m=self.goal_resolution.get())
+                            self.queue.put(("log", f"Confidence map: {os.path.basename(tif_output_filename)}"))
 
-                        self.queue.put(("log", "Creating masked SAS file..."))
-                        masked_sas_filename = csm.mask_sas_with_confidence(
-                            sas_file_path=downsample_filepath,
-                            confidence_file_path=tif_output_filename,
-                            threshold=self.threshold.get()
-                        )
-                        self.queue.put(("log", f"Masked SAS: {os.path.basename(masked_sas_filename)}"))
+                            self.queue.put(("log", "Creating masked SAS file..."))
+                            masked_sas_filename = csm.mask_sas_with_confidence(
+                                sas_file_path=downsample_filepath,
+                                confidence_file_path=tif_output_filename,
+                                threshold=self.threshold.get()
+                            )
+                            self.queue.put(("log", f"Masked SAS: {os.path.basename(masked_sas_filename)}"))
+                            workflows_run += 1
+                        else:
+                            self.queue.put(("log", f"Skipping mask workflow for {os.path.basename(tif_file)} - no motion file found"))
+
+                    if workflows_run == 0:
+                        self.queue.put(("log", "Only downsampling performed - no additional workflows selected"))
 
                     self.queue.put(("log", f"Completed processing {os.path.basename(tif_file)}"))
 
